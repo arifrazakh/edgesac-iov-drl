@@ -1,0 +1,9 @@
+numpy
+matplotlib
+gymnasium
+torch
+torch-geometric
+torch-scatter
+scikit-learn
+stable-baselines3
+pandas
