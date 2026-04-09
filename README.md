@@ -1,6 +1,16 @@
-# EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management
+<h1 align="center">EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management</h1>
 
-Repository for the paper **“EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management.”**
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/PyTorch-2.4-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/PyG-Graph%20Neural%20Networks-6A1B9A" alt="PyG">
+  <img src="https://img.shields.io/badge/Gymnasium-RL%20Environment-0081A5" alt="Gymnasium">
+  <img src="https://img.shields.io/badge/Domain-5G%20NR%20IoV-5468FF" alt="5G NR IoV">
+</p>
+
+<p align="center">
+  Repository for the paper <strong>“EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management.”</strong>
+</p>
 
 EdgeSAC studies **joint transmit-power and channel-reservation control** for a hierarchical **5G NR Internet of Vehicles (IoV)** network with **macro/micro tiers**, **dual connectivity**, **graph-aware reinforcement learning**, and **NR/MIMO-consistent link modeling**.
 
