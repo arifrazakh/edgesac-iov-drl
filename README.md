@@ -217,113 +217,274 @@ This makes the benchmark far more realistic than a toy abstract RL environment.
 
 ## Codebase Tour
 
-This section explains what each main file is responsible for.
+This section explains the repository in a more practical way: **what the main objects are**, **what they store**, and **how they interact during one environment step**. For new readers, this is usually easier to understand than looking only at file names.
+
+### Core simulation objects
+
+#### `BaseStation`
+A **base station** is the main controllable network entity in the environment.
+
+In the simulation logic, each base station stores and updates information such as:
+
+- its **ID**, **location**, **height**, and **tier type** (`Ma` for macro, `Mi` for micro),
+- its current **transmit power**,
+- its currently **reserved/assigned channels**,
+- its current **coverage radius**,
+- and the **per-channel power split** after water-filling.
+
+In simple words, the agent does **not** directly control users. It controls the **base stations**, and each base station then decides how much power and how many channels it will make available in that slot.
+
+A base station is also responsible for several important physical-layer computations, such as:
+
+- computing **3GPP-style path loss**,
+- updating its **coverage area** from the current power and carrier settings,
+- reserving channels from the available pool,
+- and exposing free channels for user admission.
+
+So, when reading the code, think of `BaseStation` as the object that represents **radio infrastructure plus local resource state**.
+
+---
+
+#### `Channel`
+A **channel** represents one radio resource unit that belongs to a base station for a given carrier.
+
+Each channel keeps:
+
+- a unique **channel ID**,
+- a **carrier frequency**,
+- a **bandwidth**,
+- a **noise figure**,
+- the connected **users** on that channel,
+- and the serving **base station**.
+
+Its job is simple but important: it gives the environment a concrete object for bandwidth, thermal noise, carrier separation, and per-user assignment. Instead of saying “the user is connected somehow,” the code says “the user is connected through this exact channel on this exact base station.”
+
+This is important because later the environment uses the channel to compute:
+
+- **noise power**,
+- **SINR**,
+- **data rate**,
+- and whether the channel is already occupied or still free.
+
+---
+
+#### `User`
+A **user** represents a vehicle or mobile IoV node moving through the network.
+
+Each user stores:
+
+- its **ID** and **location**,
+- its **velocity** and mobility state,
+- its current **traffic demand**,
+- the channels currently assigned to it,
+- per-link or per-channel **SINR values**,
+- and the resulting **data rate** and **latency**.
+
+In the code, a user is not just a point on the map. It is a dynamic object that keeps changing over time:
+
+- it moves along the road grid,
+- its demand may change,
+- it may be connected to a macro BS, a micro BS, or both,
+- and its performance is recomputed every step.
+
+So when you read `User`, think of it as the object that carries **mobility**, **service demand**, and **experienced network quality**.
+
+---
+
+#### `MobileNetwork`
+`MobileNetwork` is the **main environment class**. It combines everything together.
+
+This is the class that contains:
+
+- the list of **base stations**,
+- the list of **users**,
+- the pools of **macro and micro channels**,
+- the mobility model,
+- the observation and action spaces,
+- the scheduler,
+- the reward function,
+- and the metrics reported in each step.
+
+This is the object the RL agent actually interacts with. When the agent calls `step(action)`, it is really calling the `MobileNetwork` environment to:
+
+1. decode the action,
+2. update base-station power and channel reservation,
+3. run user association,
+4. allocate power across active channels,
+5. compute SINR, rate, latency, fairness, and other diagnostics,
+6. return the next observation, reward, and info dictionary.
+
+If you want to understand the full system behavior, this is the most important class to read first.
+
+---
+
+## How these objects work together
+
+A useful mental model is:
+
+```text
+BaseStation -> owns channels and coverage
+Channel     -> carries radio resources for one carrier/bandwidth
+User        -> moves, requests service, and experiences SINR/rate/latency
+MobileNetwork -> orchestrates all of the above inside the RL loop
+```
+
+During one slot:
+
+- the **agent outputs actions for base stations**,
+- each **base station reserves channels and updates coverage**,
+- users search for the **best macro and micro opportunities**,
+- channels become the concrete resources used for service,
+- and the environment measures the resulting network quality.
+
+That means the code is fundamentally **base-station-centric**, while users and channels are the entities that make the consequences of those decisions visible.
+
+---
+
+## Important environment logic in plain language
+
+### 1) Macro and micro tiers
+The environment has two types of base stations:
+
+- **macro BSs** for broad coverage,
+- **micro BSs** for denser capacity.
+
+The code assigns different defaults to them, including power budget, height, carrier frequency, coverage behavior, and MIMO rank. This is why the macro tier behaves differently from the micro tier.
+
+### 2) Channel pools
+The environment creates separate pools for:
+
+- **macro channels**, and
+- **micro channels**.
+
+Each pool is tied to carrier frequencies and per-channel bandwidths. When a base station reserves channels, it does not create them from nowhere; it selects them from its carrier-specific pool.
+
+### 3) Coverage and association
+Each base station updates a coverage radius from its power and path-loss model. Users are then checked against that coverage. A user is only eligible for a base station if it is inside that base station’s current service region.
+
+### 4) Dual connectivity
+The scheduler follows a practical rule:
+
+- **at most one macro link**, and
+- **at most one micro link**
+
+per user per step.
+
+This is one of the most important design choices in the code because it keeps the scheduling feasible and aligned with the problem formulation.
+
+### 5) Water-filling
+After users are admitted, the base station does not split power equally in a naive way. Instead, the environment applies **water-filling** over active channels, which gives more useful channels more power under the site budget.
+
+### 6) Mobility
+Users move over time, and their motion changes:
+
+- distance to base stations,
+- visibility and coverage membership,
+- handover behavior,
+- interference conditions,
+- and ultimately rate and latency.
+
+This is why the environment is dynamic and not just a fixed snapshot optimizer.
+
+---
+
+## Main files and what they do
 
 ### `scripts/train_compare.py`
 **Main experiment entry point.**
 
-This script is the best place to start if you want to reproduce the project workflow. It is intended to:
+This script is the practical starting point for most users. It usually handles the full experiment workflow:
 
-- train the proposed EdgeSAC model,
-- run DRL baselines,
-- evaluate non-learning heuristics,
-- collect metrics,
-- and write CSV logs for later plotting.
+- training the proposed method,
+- running baseline DRL agents,
+- evaluating non-learning heuristics,
+- collecting metrics,
+- and writing logs/results for later plotting.
 
-If you want a single file to understand the overall pipeline, start here.
+If you only open one file first, open this one.
 
 ---
 
 ### `src/iov_power_channel/envs/mobile_network_env.py`
-**Hierarchical IoV simulation environment.**
+**Main environment logic.**
 
-This is the environment that converts an RL action into actual network behavior. It is the most important file for understanding the system model.
+This file contains the environment-side logic that turns RL outputs into actual network behavior. It is the place to read if you want to understand how:
 
-It handles:
+- base stations are modeled,
+- users move,
+- channels are reserved,
+- users are associated,
+- SINR and rates are computed,
+- and rewards/diagnostics are generated.
 
-- macro/micro deployment,
-- user mobility,
-- channel reservation,
-- coverage checking,
-- user association,
-- dual connectivity,
-- power splitting,
-- SINR and rate computation,
-- latency and QoS measurement,
-- and reward construction.
-
-If you want to understand **how an action becomes a radio decision**, read this file first.
+This is the best file for understanding the **system model in code form**.
 
 ---
 
 ### `src/iov_power_channel/agents/engnn_sac.py`
 **Proposed EdgeSAC / ENGNN-SAC implementation.**
 
-This module contains the graph-aware SAC agent. Conceptually, it includes:
+This file contains the graph-aware SAC agent. It is responsible for:
 
-- graph construction over base stations,
-- actor and critic networks that operate on graph-structured data,
-- replay-memory sampling,
-- entropy-regularized SAC updates,
-- and action scaling from network outputs to valid environment actions.
+- building or consuming the **base-station graph**,
+- running the **graph encoder**,
+- producing **continuous per-BS actions**,
+- maintaining the actor/critic/value networks,
+- and performing SAC updates from replay samples.
 
-This file is the core of the proposed method.
+This is the best file for understanding the **learning method itself**.
 
 ---
 
 ### `src/iov_power_channel/baselines/sb3_agents.py`
-**Standard DRL baselines.**
+**Baseline RL agents.**
 
-This module contains baseline agents such as:
+This module contains standard baseline agents such as SAC, PPO, and TD3. These are useful for showing whether the gain comes from:
 
-- **SAC**
-- **PPO**
-- **TD3**
-
-These baselines are important because they help separate the benefit of **graph-aware structured control** from the benefit of using RL in general.
+- using RL in general, or
+- using the proposed **graph-aware structured control**.
 
 ---
 
 ### `src/iov_power_channel/baselines/heuristics.py`
 **Non-learning baselines.**
 
-This file contains conventional comparison methods such as fixed-power or max-SINR-style strategies. These baselines are useful for showing how much gain comes from learning-based control versus handcrafted rules.
+This file contains hand-designed baseline methods, such as fixed-power or rule-based association/control strategies. These baselines matter because they show how much improvement learning provides over simpler engineering rules.
 
 ---
 
 ### `src/iov_power_channel/utils/common.py`
 **Shared utilities.**
 
-This module is intended for helper logic reused across training, evaluation, logging, or plotting.
+This module is for helper logic reused across training, evaluation, logging, or plotting.
 
 ---
 
 ### `results/`
 **Saved experiment outputs.**
 
-This directory contains training and evaluation CSV files for the proposed method and the baselines. These outputs are useful for:
+This folder stores CSV logs and evaluation results. These files are useful for:
 
-- reproducing paper figures,
-- running post-hoc analysis,
-- comparing algorithms across user loads,
-- and preparing plots or tables for reports.
+- reproducing plots,
+- checking convergence,
+- comparing algorithms,
+- and preparing tables/figures for a paper.
 
 ---
 
 ### `graphs/`
 **Prepared result figures.**
 
-This folder contains visual summaries such as reward, QoS, satisfaction, and energy-related plots.
+This folder contains the ready-made performance plots used for visual comparison.
 
 ---
 
 ### `figs/`
-**Figures used in the README and manuscript.**
+**Explanatory figures for the paper and README.**
 
-This folder contains the system model, method pipeline, and simulation figures used to explain the repository visually.
+This folder contains the system model, the learning/control pipeline, and the simulation-rendering figures used to explain the project visually.
 
 ---
-
 ## Repository Structure
 
 ```text
