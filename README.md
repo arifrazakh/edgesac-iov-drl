@@ -4,18 +4,42 @@ Repository for the paper **“EdgeSAC: Graph Neural Soft Actor-Critic for Hierar
 
 EdgeSAC studies **joint transmit-power and channel-reservation control** for a hierarchical **5G NR Internet of Vehicles (IoV)** network with **macro/micro tiers**, **dual connectivity**, **graph-aware reinforcement learning**, and **NR/MIMO-consistent link modeling**.
 
-The main idea is simple: instead of treating each base station independently or discretizing radio decisions, EdgeSAC builds a **graph over base stations**, reasons about **interference coupling**, and outputs **continuous per-site control actions**. A scheduler then turns those actions into feasible radio allocations under coverage, channel-pool, and dual-connectivity constraints.
+The core idea is to represent the radio network as a **graph of base stations**, let a **graph-aware Soft Actor-Critic (SAC)** agent output **continuous per-site control actions**, and then map those actions into feasible radio decisions using an **on-demand scheduler** and **water-filling power allocation**. This keeps the control space continuous while still respecting practical constraints such as finite channel pools, tier budgets, coverage, and the rule that each user can hold **at most one macro and one micro link per slot**.
 
 ---
 
-## Highlights
+## Overview
 
-- **Graph-aware SAC** for interference-coupled radio control across macro and micro tiers
-- **Continuous per-base-station actions** for power and reservation control
-- **Scheduler-aligned design** with at most one macro and one micro link per user per slot
-- **3GPP-style UMa/UMi propagation**, Manhattan mobility, and NR-like PHY abstraction
-- **Shannon-with-gap + rank-adaptive MIMO** without action discretization
-- **Learning and non-learning comparisons** with ready-made logs, results, and figures
+Hierarchical IoV resource management is difficult because several objectives are tightly coupled:
+
+- **throughput** must remain high under dense interference,
+- **power consumption** must remain controlled,
+- **latency** must stay low under mobility,
+- **fairness and satisfaction** must remain stable as load changes,
+- and all decisions must respect **finite radio resources** and **dual-connectivity limits**.
+
+EdgeSAC addresses this by combining:
+
+1. **Graph-aware interference reasoning** across macro and micro base stations,
+2. **Continuous-action SAC** for per-site control,
+3. **Scheduler-aligned reservation and admission**,
+4. **Shannon-with-gap + rank-adaptive MIMO** for NR-consistent evaluation,
+5. and **realistic urban mobility and propagation modeling** for reproducible experiments.
+
+Compared with non-graph or non-scheduler-aware baselines, the method is designed to better align learning with what the network actually does at run time.
+
+---
+
+## What Makes EdgeSAC Different
+
+- **Graph-aware SAC** instead of treating each base station independently
+- **Continuous per-base-station control** instead of coarse action discretization
+- **Dual-tier scheduling** with at most one macro and one micro link per user
+- **On-demand channel activation** instead of blanket reservation
+- **Water-filling power split** across active channels
+- **3GPP-style UMa/UMi propagation** with Manhattan mobility
+- **NR-consistent Shannon-with-gap rate mapping** with **rank-adaptive MIMO**
+- **Strong experiment logging** for reward, QoS, latency, fairness, handover, energy, and utilization
 
 ---
 
@@ -23,63 +47,270 @@ The main idea is simple: instead of treating each base station independently or 
 
 ### 1) Hierarchical IoV system model
 
-This figure illustrates the two-tier IoV deployment used throughout the paper: macro cells provide wide-area coverage, micro cells densify capacity, and vehicles may hold **one macro link and one micro link** simultaneously. The controller manages power and spectrum decisions while handoffs occur under mobility.
+This figure shows the two-tier deployment used in the paper. Macro cells provide wide-area service, micro cells densify capacity, and vehicles may simultaneously keep **one macro link and one micro link**. The controller manages power and spectrum while mobility triggers handoffs.
 
 ![System Model](figs/system-model.png)
 
-### 2) EdgeSAC learning pipeline
+### 2) EdgeSAC learning and control pipeline
 
-This figure shows the control loop used by the method. The mobile environment produces the current state, reward, and next state; the graph-aware SAC agent outputs per-site actions; replay memory stores transitions; and actor/critic/value networks are updated from sampled experience.
+This figure shows the full control loop. The environment produces the current state, reward, and next state; the graph-aware SAC agent outputs per-site actions; replay memory stores transitions; and actor/critic/value networks are updated from sampled experience.
 
 ![EdgeSAC Pipeline](figs/edgesac-pipeline.png)
 
 ### 3) Simulation environment rendering
 
-This rendering shows how the environment looks during simulation. It is useful for visually checking deployment geometry, macro/micro placement, user movement, coverage behavior, and qualitative scheduling dynamics during training or testing.
+This rendering is useful for visually checking deployment geometry, macro/micro placement, user movement, coverage regions, and qualitative scheduling behavior during training or testing.
 
 ![Simulation Setup](figs/sim-setup.png)
 
 ---
 
-## What Problem This Repository Solves
+## Unified System View
 
-Hierarchical IoV resource management is difficult because the controller must balance several coupled objectives at once:
+```text
+Vehicular mobility + traffic demand
+              |
+              v
+Hierarchical IoV environment
+(macro tier + micro tier + carrier pools + mobility + PHY)
+              |
+              v
+Base-station graph construction
+(node features + edge features)
+              |
+              v
+EdgeSAC agent
+(ENGNN actor + graph critics + value network)
+              |
+              v
+Continuous per-BS actions
+[power fraction, reservation fraction]
+              |
+              v
+On-demand scheduler
+(coverage-aware association, dual connectivity, channel admission)
+              |
+              v
+Water-filling power allocation + SINR/rate evaluation
+              |
+              v
+Reward, diagnostics, replay memory, network updates
+```
 
-- high throughput under dense interference,
-- low power consumption,
-- stable service under mobility,
-- fairness and user satisfaction,
-- and realistic admission under finite channel pools.
-
-EdgeSAC addresses this by combining a **permutation-equivariant graph encoder**, **continuous-action SAC**, **on-demand reservation/scheduling**, and **NR/MIMO-consistent evaluation**. In the paper, the method is positioned against baselines that either lack graph-aware inter-BS reasoning, lack continuous per-BS radio control, or are not fully aligned with scheduler-aware dual-tier operation.
+This design is important because the agent does **not** directly assign users to channels one by one. Instead, it outputs **continuous control signals per base station**, and the environment converts them into feasible scheduling and power-allocation decisions.
 
 ---
 
-## How EdgeSAC Works
+## Method Summary
 
-At each time step, every base station outputs a **2D continuous action**:
+### Action space
 
-- `action[i, 0]` → **power fraction**
-- `action[i, 1]` → **channel / reservation fraction**
+For each base station `b`, the policy outputs a **2D continuous action**:
 
-These actions are mapped to:
+- `action[b, 0]` → **power fraction**
+- `action[b, 1]` → **channel / reservation fraction**
 
-- site transmit power under per-tier budgets,
+These are mapped to:
+
+- transmit power under per-tier budgets,
 - reserved channel counts under carrier availability,
-- scheduler-side admission decisions,
-- and per-channel power allocations via **water-filling**.
+- user admission under macro/micro constraints,
+- and per-channel power allocations via water-filling.
 
-The environment then:
+### State representation
 
-1. updates per-site coverage,
-2. reserves channels based on the action,
-3. performs coverage-aware and load-aware association,
-4. allows at most **one macro and one micro link per user**,
-5. computes per-channel power splits,
-6. evaluates SINR, rate, latency, fairness, and satisfaction,
-7. and returns the next observation and reward.
+The environment provides a **per-base-station observation tensor**. In the simulation code, the observation has shape:
 
-This keeps the agent’s action space fully continuous while still respecting practical network constraints.
+```python
+(num_base_stations, 13)
+```
+
+The agent then augments this with type information (`macro` vs `micro`) and builds a **static k-nearest-neighbor graph** over base-station locations.
+
+### Scheduler rule
+
+A user can receive:
+
+- **at most one macro link**, and
+- **at most one micro link**
+
+in a given time slot.
+
+This keeps the control problem practical and aligns the learning interface with the actual scheduler.
+
+### Reward objective
+
+The environment uses a utility-versus-power tradeoff:
+
+```python
+reward = 10.0 * util - 2.0 * power_norm
+```
+
+where `util` measures served demand relative to requested demand, and `power_norm` is normalized total transmit power.
+
+---
+
+## Architecture Details
+
+The paper and code together imply the following architecture.
+
+### 1) Environment-side modeling
+
+The environment models:
+
+- macro and micro base stations,
+- users with mobility,
+- carrier-specific channel pools,
+- coverage updates from link-budget calculations,
+- load-aware association,
+- dual connectivity constraints,
+- water-filling power allocation,
+- SINR/rate/latency evaluation,
+- and reward/diagnostic generation.
+
+### 2) Graph construction
+
+The agent builds a graph where:
+
+- **nodes** are base stations,
+- **edges** connect nearby interacting sites,
+- **node features** summarize power, utilization, demand, mobility, and interference-related information,
+- **edge features** summarize distance, carrier match, tier pairing, and interference context.
+
+In the simulation code, the graph is formed using a **static k-nearest-neighbor graph** with default `n_neighbors = 6`.
+
+### 3) Graph-aware actor and critics
+
+The graph encoder uses edge-aware message passing. In the provided simulation implementation:
+
+- the actor is an **ENGNN-based policy**,
+- the critics are **graph-aware Q-networks**,
+- the value network is also graph-based,
+- and the actor/critics use **two graph blocks** by default.
+
+This gives the policy a structured way to reason about **interference coupling** and **neighbor interactions** instead of making isolated decisions per cell.
+
+### 4) PHY-consistent evaluation
+
+The environment uses:
+
+- **3GPP-style UMa / UMi path loss**,
+- **Shannon-with-gap rate mapping**,
+- **256-QAM spectral-efficiency cap**,
+- **NR overhead factor**,
+- **rank-adaptive MIMO**,
+- and **water-filling** over active channels.
+
+This makes the benchmark far more realistic than a toy abstract RL environment.
+
+---
+
+## Codebase Tour
+
+This section explains what each main file is responsible for.
+
+### `scripts/train_compare.py`
+**Main experiment entry point.**
+
+This script is the best place to start if you want to reproduce the project workflow. It is intended to:
+
+- train the proposed EdgeSAC model,
+- run DRL baselines,
+- evaluate non-learning heuristics,
+- collect metrics,
+- and write CSV logs for later plotting.
+
+If you want a single file to understand the overall pipeline, start here.
+
+---
+
+### `src/iov_power_channel/envs/mobile_network_env.py`
+**Hierarchical IoV simulation environment.**
+
+This is the environment that converts an RL action into actual network behavior. It is the most important file for understanding the system model.
+
+It handles:
+
+- macro/micro deployment,
+- user mobility,
+- channel reservation,
+- coverage checking,
+- user association,
+- dual connectivity,
+- power splitting,
+- SINR and rate computation,
+- latency and QoS measurement,
+- and reward construction.
+
+If you want to understand **how an action becomes a radio decision**, read this file first.
+
+---
+
+### `src/iov_power_channel/agents/engnn_sac.py`
+**Proposed EdgeSAC / ENGNN-SAC implementation.**
+
+This module contains the graph-aware SAC agent. Conceptually, it includes:
+
+- graph construction over base stations,
+- actor and critic networks that operate on graph-structured data,
+- replay-memory sampling,
+- entropy-regularized SAC updates,
+- and action scaling from network outputs to valid environment actions.
+
+This file is the core of the proposed method.
+
+---
+
+### `src/iov_power_channel/baselines/sb3_agents.py`
+**Standard DRL baselines.**
+
+This module contains baseline agents such as:
+
+- **SAC**
+- **PPO**
+- **TD3**
+
+These baselines are important because they help separate the benefit of **graph-aware structured control** from the benefit of using RL in general.
+
+---
+
+### `src/iov_power_channel/baselines/heuristics.py`
+**Non-learning baselines.**
+
+This file contains conventional comparison methods such as fixed-power or max-SINR-style strategies. These baselines are useful for showing how much gain comes from learning-based control versus handcrafted rules.
+
+---
+
+### `src/iov_power_channel/utils/common.py`
+**Shared utilities.**
+
+This module is intended for helper logic reused across training, evaluation, logging, or plotting.
+
+---
+
+### `results/`
+**Saved experiment outputs.**
+
+This directory contains training and evaluation CSV files for the proposed method and the baselines. These outputs are useful for:
+
+- reproducing paper figures,
+- running post-hoc analysis,
+- comparing algorithms across user loads,
+- and preparing plots or tables for reports.
+
+---
+
+### `graphs/`
+**Prepared result figures.**
+
+This folder contains visual summaries such as reward, QoS, satisfaction, and energy-related plots.
+
+---
+
+### `figs/`
+**Figures used in the README and manuscript.**
+
+This folder contains the system model, method pipeline, and simulation figures used to explain the repository visually.
 
 ---
 
@@ -133,174 +364,110 @@ This keeps the agent’s action space fully continuous while still respecting pr
 
 ---
 
-## Code Walkthrough
-
-This section explains what each main file is for, so a new reader can understand the codebase quickly.
-
-### `scripts/train_compare.py`
-Main experiment entry point.
-
-This script is the practical starting point for most users. It is intended to:
-
-- train the proposed EdgeSAC policy,
-- run baseline DRL agents,
-- evaluate non-learning heuristics,
-- collect metrics,
-- and write logs/results for later plotting and comparison.
-
-If you want to reproduce the main comparisons of the repository, this is the first file to run.
-
-### `src/iov_power_channel/agents/engnn_sac.py`
-Proposed **EdgeSAC / ENGNNSAC** implementation.
-
-This module contains the graph-aware Soft Actor-Critic agent. The policy operates on a **base-station graph** rather than on isolated cell features, so the actor and critics can reason about interference coupling, neighboring load, and tier interactions. In the paper, EdgeSAC uses a permutation-equivariant graph representation and continuous control rather than hybrid or discretized action selection.
-
-### `src/iov_power_channel/envs/mobile_network_env.py`
-Hierarchical IoV simulation environment.
-
-This is the core environment that turns RL actions into network behavior. Based on the uploaded simulation code and the paper description, the environment models:
-
-- macro and micro base stations,
-- vehicular users with mobility,
-- carrier-aware channel pools,
-- coverage updates from link-budget assumptions,
-- on-demand channel reservation,
-- dual connectivity constraints,
-- water-filling power allocation,
-- SINR/rate/latency evaluation,
-- and reward/diagnostic generation.
-
-This file is the best place to understand how a continuous action becomes an actual radio decision.
-
-### `src/iov_power_channel/baselines/sb3_agents.py`
-Standard DRL baselines.
-
-This module contains baseline learning agents used for comparison with the proposed method, such as **SAC**, **PPO**, and **TD3**. These baselines help show what improvement comes from the graph-aware design rather than from using RL in general.
-
-### `src/iov_power_channel/baselines/heuristics.py`
-Non-learning baselines.
-
-This file contains hand-designed baseline strategies such as reservation-based or max-SINR-style rules. These baselines are important because they show how much benefit the learned policy provides over conventional scheduling/control logic.
-
-### `src/iov_power_channel/utils/common.py`
-Shared utilities.
-
-This module is intended for reusable helper functions shared across training, evaluation, logging, or plotting workflows.
-
-### `results/`
-Saved experiment outputs.
-
-This folder contains the generated CSV files for training and evaluation. These logs can be used to reproduce paper plots, compare policies, and inspect scalability across 100-, 200-, and 300-user scenarios.
-
-### `graphs/`
-Prepared result figures.
-
-This folder contains ready-to-show figures for reward, QoS, satisfaction, and energy/fairness trends.
-
-### `figs/`
-Paper and README figures.
-
-This folder contains the system-model, pipeline, and simulation-setup figures used to explain the method visually.
-
----
-
 ## Environment and Modeling Details
 
-The uploaded paper and simulation code show that the environment is not a toy abstraction. It includes several important modeling choices that make the benchmark more realistic:
+The environment is designed to be more realistic than a generic benchmark. Important modeling choices include:
 
-- **3GPP-style UMa / UMi path loss** for macro and micro tiers
-- **Manhattan-grid mobility** with road structure and turning behavior
-- **Shannon-with-gap rate mapping**
-- **256-QAM spectral-efficiency cap**
+- **3GPP-style UMa / UMi path loss**
+- **Manhattan-grid mobility**
+- **Shannon-with-gap link abstraction**
+- **strict 256-QAM spectral-efficiency cap**
 - **rank-adaptive MIMO**
 - **load-aware association**
 - **water-filling power split across active channels**
-- **per-step metrics** such as latency, QoS, fairness, satisfaction, handovers, and utilization
+- **per-step tracking of QoS, latency, fairness, satisfaction, overlap, outage, and handover metrics**
 
-In the uploaded simulation code, the environment uses:
-
-- `NR_OVERHEAD = 0.85`
-- `SNR_GAP_DB = 1.5`
-- `MIMO_MAX_RANK = {'Ma': 4, 'Mi': 8}`
-- an observation with **13 features per base station**
-- and a continuous action space of shape **(num_base_stations, 2)**.
-
----
-
-## Graph State and Agent View
-
-In the paper, the state is modeled as a graph whose:
-
-- **nodes** represent base stations,
-- **edges** represent nearby interacting base-station pairs,
-- **node features** include tier flag, power/utilization, demand/mobility summaries, and interference-related information,
-- **edge features** include distance, carrier match, type pairing, and power/interference context.
-
-The paper also states that the implementation constructs the inter-BS graph as a **static k-nearest-neighbor graph** over base-station coordinates with **default `k = 6`** and bidirectional message passing. This is a key part of why the method can reason about coupled interference rather than treating each site independently.
-
----
-
-## Reward and Control Objective
-
-The uploaded simulation code uses a reward shaped around **utility versus normalized power**, specifically:
-
-- reward contribution from service utility,
-- penalty from normalized power use,
-- plus environment-level diagnostics for fairness, latency, outages, satisfaction, and handover behavior.
-
-In the simulation file, the environment reward is implemented as:
+From the simulation implementation, the environment uses the following representative settings:
 
 ```python
-reward = 10.0 * util - 2.0 * power_norm
+NR_OVERHEAD = 0.85
+SNR_GAP_DB = 1.5
+MIMO_MAX_RANK = {'Ma': 4, 'Mi': 8}
+observation_shape = (num_base_stations, 13)
+action_shape = (num_base_stations, 2)
 ```
 
-This is consistent with the paper’s description that the controller balances demand satisfaction against normalized power use rather than simply maximizing throughput.
+These details are important because they define the actual control problem seen by the agent.
 
 ---
 
-## Key Files in `results/`
+## What the Code Is Doing Internally
 
-The repository already includes multiple result logs. For example:
+A useful way to understand the code is to follow one environment step.
 
-- `training_log.csv` — overall training trace for the proposed method
-- `edgesac_hold_eval.csv` — evaluation summary for the proposed method
-- `edgesac_users200.csv`, `edgesac_users300.csv` — scalability experiments under heavier user loads
-- `sac_mlp_log_200.csv`, `ppo_mlp_log_200.csv`, `td3_mlp_log200.csv` — baseline logs for comparison
-- `fix_power_reser_eval.csv`, `ma_power_demand_eval.csv`, `max_sinr_eval.csv` — non-learning baseline evaluations
+### Step-by-step logic
 
-These make the repository useful not only for training, but also for **plot reproduction**, **post-hoc analysis**, and **paper/report preparation**.
+1. **The agent observes the network state** for all base stations.
+2. **A graph is built** over the base stations.
+3. **The actor outputs per-BS actions** for power and reservation fractions.
+4. **Actions are clamped/scaled** to valid ranges.
+5. **Each base station updates power and tentative channel reservation.**
+6. **Coverage is refreshed** based on current power and carrier settings.
+7. **The scheduler assigns users** with the rule “at most one macro and one micro link.”
+8. **Water-filling allocates power** across active channels.
+9. **SINR, data rate, latency, and satisfaction** are computed.
+10. **Reward and diagnostic metrics** are recorded.
+11. **The transition is pushed to replay memory.**
+12. **SAC updates** improve the actor, critics, and temperature parameter.
+
+That is the practical control loop implemented by the project.
 
 ---
 
-## Selected Result Figures
+## Metrics Logged During Training and Evaluation
 
-The repository already contains result figures under `graphs/`.
+The repository is useful not only for training, but also for analysis.
+
+### Common logged quantities
+
+The provided code and result files track metrics such as:
+
+- **total data rate**
+- **macro and micro data rate**
+- **average rate**
+- **total, macro, and micro power**
+- **energy efficiency**
+- **latency** and percentile latency
+- **number of associated users**
+- **channel utilization**
+- **QoS mean**
+- **Jain fairness**
+- **handover counts and handover rate**
+- **SINR and rate percentiles**
+- **outage ratios**
+- **coverage statistics**
+- **overlap ratio**
+- **reward decomposition**
+
+### Why this matters
+
+This logging makes the repository well suited for:
+
+- algorithm comparison,
+- reviewer-requested analysis,
+- fairness and robustness studies,
+- scalability studies across user loads,
+- and paper-quality plot generation.
+
+---
+
+## Included Result Figures
+
+The repository already contains several figures under `graphs/`.
 
 | Reward | QoS / Latency |
 |---|---|
 | ![Reward](graphs/reward.png) | ![QoS](graphs/qos.png) |
 
-| Satisfaction / Handover | Energy / Fairness |
+| Satisfaction / Service | Energy / Efficiency |
 |---|---|
 | ![Satisfaction](graphs/satisfy2.png) | ![Energy](graphs/energy.png) |
 
 ---
 
-## Reported Performance Snapshot
-
-From the paper’s reported scalability table, EdgeSAC maintains strong performance across increasing user loads:
-
-| Users | Reward | Total Rate (Mbps) | EE (Mb/J) | Latency (ms) | Satisfied Users |
-|---:|---:|---:|---:|---:|---:|
-| 100 | 3.75 | 7601  | 33.21 | 20.0 | 40 |
-| 200 | 3.33 | 14086 | 59.12 | 27.1 | 71 |
-| 300 | 3.13 | 18961 | 85.02 | 31.4 | 99 |
-
-These numbers suggest that the method scales well with heavier traffic while keeping the utility–power tradeoff competitive.
-
----
-
 ## Installation
+
+### Standard installation
 
 ```bash
 python -m venv .venv
@@ -310,6 +477,10 @@ source .venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 pip install -e .
 ```
+
+### Notes
+
+This project relies on PyTorch, Gymnasium, and graph-learning dependencies. If your setup uses PyTorch Geometric, make sure your **PyTorch** and **PyG** versions are compatible.
 
 ---
 
@@ -341,9 +512,9 @@ python scripts/train_compare.py --mode heuristics --eval-episodes 10
 
 ---
 
-## Suggested Reading Order
+## How to Read the Repository for the First Time
 
-If you are opening the repository for the first time, this order is a good way to understand it:
+A good reading order is:
 
 1. `README.md`
 2. `figs/system-model.png`
@@ -355,10 +526,49 @@ If you are opening the repository for the first time, this order is a good way t
 8. `src/iov_power_channel/baselines/`
 9. `results/` and `graphs/`
 
+This order moves from the high-level idea to the implementation details.
 
+---
+
+## Reproducibility Notes
+
+To keep experiments reproducible, the project is designed around:
+
+- a fixed environment structure,
+- a graph-based state representation,
+- explicit logging to CSV,
+- saved comparison outputs,
+- and ready-made figures under `graphs/`.
+
+For robust reproduction, keep the following consistent across runs:
+
+- number and placement of base stations,
+- number of users,
+- area size and mobility parameters,
+- PyTorch / PyG version compatibility,
+- training steps and evaluation episodes,
+- and output file naming.
+
+---
+
+## Recommended README Usage for This Repository
+
+This README is written to serve **three audiences at once**:
+
+- **new readers**, who want to understand the idea quickly,
+- **reviewers or collaborators**, who want to verify the method and experiment logic,
+- and **future you**, who may return later and need a fast reminder of how the code is organized.
+
+That is why the document includes:
+
+- a plain-language overview,
+- a clear code walkthrough,
+- visual figures,
+- run commands,
+- and implementation-level detail.
 
 ---
 
 ## Contact
 
-For questions about the paper or the repository, please open an issue in the GitHub project or contact the authors listed in the manuscript.
+For questions about the paper or repository, please open an issue in the GitHub project or contact the authors listed in the manuscript.
