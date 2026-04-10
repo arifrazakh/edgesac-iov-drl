@@ -1,4 +1,4 @@
-<h1 align="center">EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management</h1>
+<h1 align="justify">EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white" alt="Python">
@@ -8,9 +8,7 @@
   <img src="https://img.shields.io/badge/Domain-5G%20NR%20IoV-5468FF" alt="5G NR IoV">
 </p>
 
-<p align="center">
-  Repository for the paper <strong>“EdgeSAC: Graph Neural Soft Actor-Critic for Hierarchical IoV Resource Management.”</strong>
-</p>
+
 
 <div align="justify">
 
